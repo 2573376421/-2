@@ -1,0 +1,1 @@
+"..\..\Libraries\seekfree_peripheral\SEEKFREE_18TFT.c" LARGE OMF2 OPTIMIZE (8,SPEED) BROWSE FLOATFUZZY(2) INCDIR(..\..\Libraries\libraries;..\..\Libraries\seekfree_libraries;..\..\Libraries\seekfree_peripheral;..\USER\inc;..\USER\src;..\CODE;..\..\Libraries\User_libraries) DEBUG PRINT(.\Out_File\SEEKFREE_18TFT.lst) TABS (2) OBJECT(.\Out_File\SEEKFREE_18TFT.obj)

@@ -1,0 +1,401 @@
+C51 COMPILER V9.60.0.0   CONTROL                                                           08/09/2020 18:26:35 PAGE 1   
+
+
+C51 COMPILER V9.60.0.0, COMPILATION OF MODULE CONTROL
+OBJECT MODULE PLACED IN .\Out_File\control.obj
+COMPILER INVOKED BY: E:\keil 5\C51\BIN\C51.EXE ..\..\Libraries\User_libraries\control.c LARGE OMF2 OPTIMIZE(8,SPEED) BRO
+                    -WSE FLOATFUZZY(2) INCDIR(..\..\Libraries\libraries;..\..\Libraries\seekfree_libraries;..\..\Libraries\seekfree_periphera
+                    -l;..\USER\inc;..\USER\src;..\CODE;..\..\Libraries\User_libraries) DEBUG PRINT(.\Out_File\control.lst) TABS(2) OBJECT(.\O
+                    -ut_File\control.obj)
+
+line level    source
+
+   1          #include "headfile.h"
+   2          /*-------------------------------------------------------------------------
+   3          
+   4          数据定义部分
+   5          
+   6          --------------------------------------------------------------------------*/
+   7          
+   8          float VOLTAGE;//实测电压值
+   9          int8 Time_Flag=0,stop_flag=0,Out_flag=0,End_Flag=0;
+  10          int8 count;
+  11          
+  12          uint16 OUT_AD_Max[4];
+  13          int16 AD_Err,AD_Sum; //测试时用于测量两侧偏差
+  14          
+  15          int16 MOTOR1,MOTOR2;//电机PWM值（带正负值）
+  16          
+  17          int16 Encoder_Left, Encoder_Right;//编码器
+  18          static Encoder_all; 
+  19          
+  20          float Car_speed;   //当前车速
+  21          int16 speed;       //速度设定
+  22          
+  23          int16 Velocity_Out,Turn_Out;
+  24          
+  25          float Vertical_Out;
+  26          float Med_Angle; //机械中植设定(默认为0)
+  27          
+  28          //直立环Kp，Ki，Kd调节区
+  29          float Vertical_Kp;
+  30          float Vertical_Kd;        
+  31          //速度环Kp，Ki，Kd调节区
+  32          float Velocity_Kp;
+  33          //转向环Kp，Ki，Kd调节区
+  34          float Turn_Kp;
+  35          float Turn_Kd;
+  36          
+  37          float check; //检查
+  38          
+  39          /*---------------------------------------
+  40          总初始化定义
+  41          
+  42          ----------------------------------------*/
+  43          void PID_config(void)
+  44          {
+  45   1        //直立环Kp，Ki，Kd调节区
+  46   1         Vertical_Kp = 280;   //280
+  47   1         Vertical_Kd = -1.3;    //-1.18    
+  48   1        //速度环Kp，Ki，Kd调节区
+  49   1         Velocity_Kp =-0.18;  //-0.18     -0.013
+  50   1        //转向环Kp，Ki，Kd调节区
+  51   1         Turn_Kp  = 40;//80.5         75
+  52   1         Turn_Kd  = -0.145;//0.659      -0.53
+C51 COMPILER V9.60.0.0   CONTROL                                                           08/09/2020 18:26:35 PAGE 2   
+
+  53   1         Med_Angle = 6; //机械中植设定(默认为0)
+  54   1         speed    = 70;       //速度设定
+  55   1      
+  56   1      }
+  57          
+  58          /*---------------------------------------
+  59          总初始化定义
+  60          
+  61          ----------------------------------------*/
+  62          void Init(void)
+  63          {
+  64   1        
+  65   1        delay_init();
+  66   1        delay_ms(1000);
+  67   1        delay_ms(1000);
+  68   1        delay_ms(1000);
+  69   1        delay_ms(1000);
+  70   1        DisableGlobalIRQ();         //关闭总中断
+  71   1        board_init();           //初始化内部寄存器，勿删除此句代码。  
+  72   1        delay_init();
+  73   1      //  simiic_init();            //IIC初始化
+  74   1        oled_init();    //oled初始化      
+  75   1        icm20602_init_simiic();       //陀螺仪初始化
+  76   1        // ccd_init();            //CCD初始化
+  77   1        PID_config();
+  78   1        adc_init(ADC_P06,ADC_SYSclk_DIV_2); //adc引脚初始化，其中P06为电源测量脚，其他为电磁检测
+  79   1        adc_init(ADC_P14,ADC_SYSclk_DIV_2);
+  80   1        adc_init(ADC_P15,ADC_SYSclk_DIV_2);
+  81   1        adc_init(ADC_P16,ADC_SYSclk_DIV_2);
+  82   1        adc_init(ADC_P17,ADC_SYSclk_DIV_2);
+  83   1          
+  84   1        ctimer_count_init(CTIM0_P34);   //编码器初始化
+  85   1        ctimer_count_init(CTIM3_P04);
+  86   1      
+  87   1        pwm_init(PWM5_P00, 17000,0);    //PWM初始化
+  88   1        pwm_init(PWM6_P01, 17000,0);
+  89   1        pwm_init(PWM2P_P22,17000,0);
+  90   1        pwm_init(PWM4P_P26,17000,0);
+  91   1      
+  92   1         
+  93   1        
+  94   1      //  uart_init(UART_1,UART1_RX_P30,UART1_TX_P31,115200,TIM_2);   //串口初始化
+  95   1        ccd_init();
+  96   1      //  adc_init(AD_CHANNEL,0X01);      
+  97   1      //  pit_timer_ms(TIM_4,10);
+  98   1        pit_timer_ms(TIM_1,5);      //中断进入设置
+  99   1        EnableGlobalIRQ();    //开启总中断
+ 100   1      
+ 101   1      }
+ 102          /*---------------------------------------
+ 103          电磁AD采集处理函数
+ 104          ----------------------------------------*/
+ 105          
+ 106          void AD_Collect(void)
+ 107          { 
+ 108   1        int8 i,j;
+ 109   1        uint8 temp;
+ 110   1      
+ 111   1      
+ 112   1        Filter(); //采集数据并滤波
+ 113   1      
+ 114   1        //4路平均滤波处理后数据
+C51 COMPILER V9.60.0.0   CONTROL                                                           08/09/2020 18:26:35 PAGE 3   
+
+ 115   1        OUT_AD_Max[0] = Filter_AD1;
+ 116   1        OUT_AD_Max[1] = Filter_AD2;
+ 117   1        OUT_AD_Max[2] = Filter_AD3;
+ 118   1        OUT_AD_Max[3] = Filter_AD4;
+ 119   1      
+ 120   1        
+ 121   1      
+ 122   1        AD_Err = (int16)(Filter_AD1+Filter_AD2-Filter_AD3-Filter_AD4);  
+ 123   1        AD_Sum = (int16)(Filter_AD1+Filter_AD2+Filter_AD3+Filter_AD4);
+ 124   1        //电感大小排序
+ 125   1        for(i = 0;i < 4;i++)
+ 126   1        {
+ 127   2          for ( j = 0; j < 3; j++)
+ 128   2          {
+ 129   3            if (OUT_AD_Max[i] > OUT_AD_Max[i + 1])
+ 130   3            {
+ 131   4              temp = OUT_AD_Max[i];
+ 132   4              OUT_AD_Max[i] = OUT_AD_Max[i + 1];
+ 133   4              OUT_AD_Max[i + 1] = temp;
+ 134   4            }   
+ 135   3          }   
+ 136   2        }
+ 137   1      }
+ 138          
+ 139          
+ 140          /*---------------------------------------
+ 141          速度环
+ 142          ----------------------------------------*/
+ 143          int16 Velocity(int16 encoder_left,int16 encoder_right)
+ 144          {
+ 145   1        static int16 Enc_Err_Lowout,PWM_out,Encoder_Err,Enc_Err_Lowout_last;                  //速度未定义，默认为0
+ 146   1        float a = 0.7;
+ 147   1        if (Time_Flag == 18)
+ 148   1        {
+ 149   2          //计算速度偏差
+ 150   2          Encoder_Err = (encoder_left + encoder_right) / 2 - speed;
+ 151   2          //对速度进行低通滤波
+ 152   2          Enc_Err_Lowout = a * Encoder_Err + (1 - a) * Enc_Err_Lowout_last;
+ 153   2          Enc_Err_Lowout_last = Enc_Err_Lowout;
+ 154   2          //速度环控制输出进行运算
+ 155   2          PWM_out = Velocity_Kp * Enc_Err_Lowout;
+ 156   2          Time_Flag = 0; //标志位清零
+ 157   2        }
+ 158   1        PWM_out = PWM_out > 8 ? 8 : (PWM_out<(-3) ? (-3):PWM_out);
+ 159   1        return PWM_out;
+ 160   1      }
+ 161          
+ 162          /*---------------------------------------
+ 163          直立环
+ 164          ----------------------------------------*/
+ 165          int16 Vertical(float V_Angle,float Angle,int16 gyro_y)
+ 166          {
+ 167   1        int16 PWM_out;
+ 168   1        PWM_out = Vertical_Kp * (Angle - V_Angle) + Vertical_Kd * gyro_y ; //(Angle - Med)换成Angle
+ 169   1        return PWM_out;
+ 170   1      }
+ 171          
+ 172          
+ 173          /*---------------------------------------
+ 174          电磁AD转向环函数（速度越大越敏感）
+ 175          ----------------------------------------*/
+ 176          int16 AD_Turn(void)
+C51 COMPILER V9.60.0.0   CONTROL                                                           08/09/2020 18:26:35 PAGE 4   
+
+ 177          {
+ 178   1        float Bias,Gyro_Ratio; //偏差和转向D的动态系数
+ 179   1        int16 PWM_out;
+ 180   1        static int16 Last_Gyro_Ratio;
+ 181   1        static uint8 first_Gyro;
+ 182   1        if (!first_Gyro)
+ 183   1        {
+ 184   2            first_Gyro = 1;
+ 185   2            Last_Gyro_Ratio = Gyro_Ratio;
+ 186   2        }
+ 187   1      
+ 188   1        Bias = (float)AD_Err / (float)AD_Sum * 100.0;
+ 189   1        Bias = Bias * (Bias * Bias / 1250.0 + 2) / 10;
+ 190   1        if (Bias > 100)
+ 191   1        Bias = 100;
+ 192   1        else if (Bias < -100)
+ 193   1        Bias = -100;  
+ 194   1        Gyro_Ratio = icm_gyro_z * icm_gyro_z / 4000000 + 4.65;
+ 195   1        Gyro_Ratio = 0.7 * Gyro_Ratio + Last_Gyro_Ratio * 0.3;
+ 196   1        Car_speed = (Encoder_Left + Encoder_Right) / 2;
+ 197   1        PWM_out = (Car_speed * Car_speed / (speed * speed) + 1) * Turn_Kp * Bias + Gyro_Ratio * Turn_Kd * icm_gyr
+             -o_z;
+ 198   1        Last_Gyro_Ratio = Gyro_Ratio;
+ 199   1        return PWM_out;
+ 200   1      }
+ 201          
+ 202          
+ 203          /*---------------------------------------
+ 204          主控制部分，需修改
+ 205          ----------------------------------------*/
+ 206          
+ 207          void control(void)
+ 208          {
+ 209   1        int16 PWM_out;
+ 210   1          if(Out_flag==0)               //出库
+ 211   1          { 
+ 212   2            get_icm20602_accdata_simiic();    //加速度
+ 213   2            get_icm20602_gyro_simiic();     //角速度
+ 214   2            Angle_Calcu();                  //数据计算  
+ 215   2            AD_Collect(); 
+ 216   2            Vertical_Out = Vertical(12,Angle_lv,icm_gyro_y);
+ 217   2            PWM_out = Vertical_Out;       
+ 218   2            if(Filter_AD2<10&&Filter_AD3<10)
+ 219   2            {       
+ 220   3              MOTOR1=PWM_out+50;  
+ 221   3              MOTOR2=PWM_out; 
+ 222   3            }         
+ 223   2            else if((Filter_AD2>=10||Filter_AD3>=10)&&(Filter_AD1<=20||Filter_AD4<=20))
+ 224   2            { 
+ 225   3              MOTOR1=PWM_out+1500;  
+ 226   3              MOTOR2=PWM_out-1500;  
+ 227   3            }
+ 228   2            else
+ 229   2            {
+ 230   3              Out_flag=1;
+ 231   3              MOTOR1=PWM_out; 
+ 232   3              MOTOR2=PWM_out;
+ 233   3            }
+ 234   2          }
+ 235   1        
+ 236   1      if(Out_flag==1) 
+ 237   1        {
+C51 COMPILER V9.60.0.0   CONTROL                                                           08/09/2020 18:26:35 PAGE 5   
+
+ 238   2          Time_Flag++;
+ 239   2      
+ 240   2          get_icm20602_accdata_simiic();    //加速度
+ 241   2          get_icm20602_gyro_simiic();     //角速度
+ 242   2          Angle_Calcu();                  //数据计算  
+ 243   2          AD_Collect();   
+ 244   2      //    ccd_collect();   //CCD采集数据
+ 245   2      //    ccd_judge();
+ 246   2        //左右编码器转向判断及其输出（1，0调节转向）
+ 247   2        if(DIRL == 1)
+ 248   2          {
+ 249   3            Encoder_Left = ctimer_count_read(CTIM0_P34);
+ 250   3          }
+ 251   2        else
+ 252   2          {
+ 253   3            Encoder_Left = -ctimer_count_read(CTIM0_P34);
+ 254   3          }
+ 255   2        if(DIRR == 0)                        //左右成对立关系故相反
+ 256   2          {
+ 257   3            Encoder_Right = ctimer_count_read(CTIM3_P04);
+ 258   3          }
+ 259   2        else
+ 260   2          {
+ 261   3            Encoder_Right = -ctimer_count_read(CTIM3_P04);
+ 262   3          }
+ 263   2      
+ 264   2      //编码器数据清零
+ 265   2        ctimer_count_clean(CTIM0_P34);
+ 266   2        ctimer_count_clean(CTIM3_P04);
+ 267   2          
+ 268   2      //将数据放入闭环系统，计算控制输出量
+ 269   2        Velocity_Out = Velocity(Encoder_Left,Encoder_Right);
+ 270   2        Vertical_Out = Vertical(Velocity_Out+Med_Angle,Angle_lv,icm_gyro_y);
+ 271   2        Turn_Out = AD_Turn();
+ 272   2        PWM_out = Vertical_Out; 
+ 273   2        MOTOR1=PWM_out - Turn_Out;  
+ 274   2        MOTOR2=PWM_out + Turn_Out;
+ 275   2        if(Filter_AD1<5&&Filter_AD2<5&&Filter_AD3<5&&Filter_AD4<5)
+ 276   2        {
+ 277   3          Load(0,0);
+ 278   3          stop_flag=1;
+ 279   3        }
+ 280   2              if(End_Flag==1)                   //入库
+ 281   2              { 
+ 282   3                  Out_flag=3;
+ 283   3              }
+ 284   2        }
+ 285   1        
+ 286   1        if(Out_flag==3)               //入库
+ 287   1          { 
+ 288   2            get_icm20602_accdata_simiic();    //加速度
+ 289   2            get_icm20602_gyro_simiic();     //角速度
+ 290   2            Angle_Calcu();                  //数据计算  
+ 291   2            AD_Collect(); 
+ 292   2            Vertical_Out = Vertical(12,Angle_lv,icm_gyro_y);
+ 293   2            PWM_out = Vertical_Out;       
+ 294   2            if(Filter_AD1>10&&Filter_AD4>10)
+ 295   2            {       
+ 296   3              MOTOR1=PWM_out+3000;  
+ 297   3              MOTOR2=PWM_out-3000;  
+ 298   3            }         
+ 299   2            else
+C51 COMPILER V9.60.0.0   CONTROL                                                           08/09/2020 18:26:35 PAGE 6   
+
+ 300   2            {
+ 301   3              stop_flag=1;
+ 302   3              Load(0,0);
+ 303   3            }
+ 304   2          }
+ 305   1          if(stop_flag==0)
+ 306   1        {   
+ 307   2          Limit(&MOTOR1,&MOTOR2);//PWM限幅      
+ 308   2          Load(MOTOR1,MOTOR2);//加载到电机上。（左，右）
+ 309   2        }
+ 310   1      
+ 311   1      }
+ 312          
+ 313          /*---------------------------------------
+ 314          充电电压判断函数
+ 315          ----------------------------------------*/
+ 316          
+ 317          //void Charge_judge(void)
+ 318          //{
+ 319          //  int16 v[10];      //judge为预设电压值
+ 320          //  float judge = 10.0;
+ 321          //  uint16 i;
+ 322          //  int16 sum = 0,V_Max = 0;
+ 323          //  while(1)
+ 324          //  {
+ 325          //    for ( i = 0; i < 10; i++)
+ 326          //    {
+ 327          //      v[i] = adc_voltage();
+ 328          //    }
+ 329          //    for ( i = 0; i < 10; i++)
+ 330          //    {
+ 331          //      V_Max = max(v[i],V_Max);
+ 332          //      sum += v[i];
+ 333          //    }   
+ 334          //    VOLTAGE = ((float)(sum - V_Max))/9.0;
+ 335          //    if(VOLTAGE = judge)
+ 336          //      break;  
+ 337          //  }
+ 338          //}
+ 339          
+ 340          void ccd_judge(void)
+ 341          {
+ 342   1        uint8 i;
+ 343   1        int8 measure;
+ 344   1        for ( i = 0; i < 128; i++)
+ 345   1        {
+ 346   2          measure = ccd_data[i] - ccd_data[i + 1];
+ 347   2          if (measure >= 10)
+ 348   2          {
+ 349   3            count++;
+ 350   3          }
+ 351   2        }
+ 352   1          if (count >= 10)
+ 353   1          {
+ 354   2            End_Flag ++;
+ 355   2          } 
+ 356   1        
+ 357   1      }
+ 358          
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+C51 COMPILER V9.60.0.0   CONTROL                                                           08/09/2020 18:26:35 PAGE 7   
+
+   CODE SIZE        =   2643    ----
+   CONSTANT SIZE    =   ----    ----
+   XDATA SIZE       =     84      28
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =   ----    ----
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =   ----    ----
+   EDATA SIZE       =   ----    ----
+   HDATA SIZE       =   ----    ----
+   XDATA CONST SIZE =   ----    ----
+   FAR CONST SIZE   =   ----    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)
